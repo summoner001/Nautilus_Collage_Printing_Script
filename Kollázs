@@ -38,6 +38,24 @@ rows=$(echo "$settings" | cut -d '|' -f2)
 paper_size=$(echo "$settings" | cut -d '|' -f3 | tr '[:upper:]' '[:lower:]')
 orientation=$(echo "$settings" | cut -d '|' -f4)
 
+# Input validálás
+if ! [[ "$cols" =~ ^[0-9]+$ ]] || ! [[ "$rows" =~ ^[0-9]+$ ]] || [ "$cols" -le 0 ] || [ "$rows" -le 0 ]; then
+    zenity --error --width=300 --text="Az oszlopok és sorok számának pozitív egész számnak kell lennie!"
+    exit 1
+fi
+
+case "$paper_size" in
+    a4|a5|letter) ;;
+    *) zenity --error --text="Érvénytelen papírméret!" && exit 1 ;;
+esac
+
+orientation_flag=""
+case "$orientation" in
+    Álló) orientation_flag="portrait" ;;
+    Fekvő) orientation_flag="landscape" ;;
+    *) zenity --error --text="Érvénytelen tájolás!" && exit 1 ;;
+esac
+
 # PDF generálás - egyszerűsített és javított változat
 temp_pdf=$(mktemp /tmp/collage_XXXXXX.pdf)
 
@@ -45,11 +63,9 @@ temp_pdf=$(mktemp /tmp/collage_XXXXXX.pdf)
 montage -tile "${cols}x${rows}" \
     -geometry "800x800+20+20<" \
     -background white \
-    -density 150 \
-    -quality 85 \
+    -quality 100 \
     "${image_files[@]}" \
-    -page "${paper_size}${orientation}" \
-    "$temp_pdf" 2>&1 | zenity --progress --pulsate --text="Kollázs készítése..." --auto-close
+    pdf:"$temp_pdf" 2>&1 | zenity --progress --pulsate --text="Kollázs készítése..." --auto-close
 
 # Eredmény ellenőrzése
 if [ ! -s "$temp_pdf" ]; then
