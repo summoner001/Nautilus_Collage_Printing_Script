@@ -28,6 +28,7 @@ settings=$(zenity --forms --title="Kollázs Beállítások" --width=400 \
     --add-entry="Sorok száma:" \
     --add-combo="Papírméret" --combo-values="A4|A5|Letter" \
     --add-combo="Tájolás" --combo-values="Álló|Fekvő" \
+    --add-combo="Képminőség (%)" --combo-values="50|60|70|80|90|100" \
     --separator="|")
 
 [ -z "$settings" ] && exit 0
@@ -37,6 +38,7 @@ cols=$(echo "$settings" | cut -d '|' -f1)
 rows=$(echo "$settings" | cut -d '|' -f2)
 paper_size=$(echo "$settings" | cut -d '|' -f3 | tr '[:upper:]' '[:lower:]')
 orientation=$(echo "$settings" | cut -d '|' -f4)
+quality=$(echo "$settings" | cut -d '|' -f5)  # Képminőség
 
 # Input validálás
 if ! [[ "$cols" =~ ^[0-9]+$ ]] || ! [[ "$rows" =~ ^[0-9]+$ ]] || [ "$cols" -le 0 ] || [ "$rows" -le 0 ]; then
@@ -63,7 +65,7 @@ temp_pdf=$(mktemp /tmp/collage_XXXXXX.pdf)
 montage -tile "${cols}x${rows}" \
     -geometry "800x800+20+20<" \
     -background white \
-    -quality 100 \
+    -quality "$quality" \
     "${image_files[@]}" \
     pdf:"$temp_pdf" 2>&1 | zenity --progress --pulsate --text="Kollázs készítése..." --auto-close
 
