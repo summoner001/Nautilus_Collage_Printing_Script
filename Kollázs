@@ -1,32 +1,33 @@
 #!/usr/bin/env bash
 
-# Kijelölt fájlok beolvasása és debug
+# Kijelölt fájlok beolvasása
 IFS=$'\n' read -d '' -r -a selected_files <<< "$NAUTILUS_SCRIPT_SELECTED_FILE_PATHS"
-echo "Kijelölt fájlok:" > /tmp/collage_debug.log
-printf "%s\n" "${selected_files[@]}" >> /tmp/collage_debug.log
 
-# Abszolút elérési utak konvertálása
+# Alapmappa meghatározása
+default_dir=$(dirname "${selected_files[0]}")
+
+# Képek kiválasztása és ellenőrzése
 image_files=()
 for file in "${selected_files[@]}"; do
     if [[ "$file" =~ \.(jpg|jpeg|png|webp|bmp|tiff)$ ]]; then
-        abs_path="$(realpath "$file")"
-        [ -f "$abs_path" ] && image_files+=("$abs_path") || echo "Nem létező fájl: $file" >> /tmp/collage_debug.log
+        if [ -f "$file" ]; then
+            image_files+=("$(realpath "$file")")
+        fi
     fi
 done
 
 [ ${#image_files[@]} -eq 0 ] && {
-    zenity --error --width=400 --text="Nincsenek érvényes képek!\nEllenőrizd a kiterjesztéseket (JPG, PNG, WEBP, BMP, TIFF).\nRészletek: /tmp/collage_debug.log"
+    zenity --error --width=300 --text="Nincsenek érvényes képek!\nTámogatott formátumok: JPG, PNG, WEBP, BMP, TIFF"
     exit 1
 }
 
-# GUI beállítások
+# Fő beállítások ablak
 settings=$(zenity --forms --title="Kollázs Beállítások" --width=400 \
     --text="Alapbeállítások" \
-    --add-entry="Oszlopok száma (pl. 2):" \
-    --add-entry="Sorok száma (pl. 3):" \
+    --add-entry="Oszlopok száma:" \
+    --add-entry="Sorok száma:" \
     --add-combo="Papírméret" --combo-values="A4|A5|Letter" \
     --add-combo="Tájolás" --combo-values="Álló|Fekvő" \
-    --add-combo="Képtípus" --combo-values="Eredeti|Négyzet|Szélesvásznú" \
     --separator="|")
 
 [ -z "$settings" ] && exit 0
@@ -36,57 +37,49 @@ cols=$(echo "$settings" | cut -d '|' -f1)
 rows=$(echo "$settings" | cut -d '|' -f2)
 paper_size=$(echo "$settings" | cut -d '|' -f3 | tr '[:upper:]' '[:lower:]')
 orientation=$(echo "$settings" | cut -d '|' -f4)
-img_type=$(echo "$settings" | cut -d '|' -f5)
 
-# Képarány beállítás
-case "$img_type" in
-    "Négyzet") geometry="1000x1000^" ;;
-    "Szélesvásznú") geometry="1600x900^" ;;
-    *) geometry="1000x1000>" ;;  # Eredeti arány megőrzése
-esac
-
-# PDF generálás - explicit képparaméterekkel
+# PDF generálás - egyszerűsített és javított változat
 temp_pdf=$(mktemp /tmp/collage_XXXXXX.pdf)
 
-echo "Montage parancs:" >> /tmp/collage_debug.log
-echo "montage -tile \"${cols}x${rows}\" -geometry \"$geometry+20+20\" -background white -density 150 -units PixelsPerInch \"${image_files[@]}\" -page \"${paper_size}${orientation}\" \"$temp_pdf\"" >> /tmp/collage_debug.log
-
+# Képek átméretezése és elrendezése
 montage -tile "${cols}x${rows}" \
-    -geometry "$geometry+20+20" \
+    -geometry "800x800+20+20<" \
     -background white \
     -density 150 \
-    -units PixelsPerInch \
+    -quality 85 \
     "${image_files[@]}" \
     -page "${paper_size}${orientation}" \
-    "$temp_pdf" 2>&1 >> /tmp/collage_debug.log
+    "$temp_pdf" 2>&1 | zenity --progress --pulsate --text="Kollázs készítése..." --auto-close
 
 # Eredmény ellenőrzése
 if [ ! -s "$temp_pdf" ]; then
-    zenity --error --width=500 --text="Hiba történt!\nA generált PDF üres.\nEllenőrizd a képeket és a debug logot:\n/tmp/collage_debug.log"
+    zenity --error --width=300 --text="A PDF generálása sikertelen!\nLehet, hogy néhány kép nem megfelelő formátumú."
     exit 1
 fi
 
-# Sikeres művelet után mentési lehetőségek
-choice=$(zenity --list --title="Sikeres generálás" --width=450 --height=220 \
-    --text="Kollázs készült (Méret: $(du -h "$temp_pdf" | cut -f1))\nMit szeretnél tenni?" \
-    --column="Opció" "Megnyitás" "Mentés" "Nyomtatás")
+# Mentési lehetőségek
+choice=$(zenity --list --title="Kollázs Mentése" --width=400 --height=200 \
+    --text="Kollázs készült (Méret: $(du -h "$temp_pdf" | cut -f1))" \
+    --column="Opció" "Mentés itt" "Mentés máshová" "Előnézet" "Nyomtatás")
 
 case "$choice" in
-    "Megnyitás")
-        if command -v evince >/dev/null; then
-            evince "$temp_pdf" &
-        else
-            xdg-open "$temp_pdf" &
-        fi
+    "Mentés itt")
+        final_pdf="${default_dir}/Kollazs_$(date +%Y%m%d_%H%M%S).pdf"
+        mv "$temp_pdf" "$final_pdf"
+        zenity --info --width=300 --text="PDF elmentve ide:\n${final_pdf/#$HOME/~}"
         ;;
-    "Mentés")
+    "Mentés máshová")
         target_file=$(zenity --file-selection --save --confirm-overwrite \
-            --filename="${default_dir}/Kollazs_$(date +%Y%m%d).pdf" \
-            --title="PDF mentése")
+            --filename="${default_dir}/Kollazs_$(date +%Y%m%d_%H%M%S).pdf" \
+            --title="Mentés másként")
         [ -n "$target_file" ] && mv "$temp_pdf" "$target_file"
         ;;
+    "Előnézet")
+        xdg-open "$temp_pdf" &
+        ;;
     "Nyomtatás")
-        lp "$temp_pdf" | zenity --progress --pulsate --text="Nyomtatás..." --auto-close
+        lp "$temp_pdf"
+        zenity --info --width=300 --text="Nyomtatás elindítva!"
         ;;
     *)
         rm "$temp_pdf"
