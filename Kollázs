@@ -1,0 +1,118 @@
+#!/usr/bin/env bash
+
+# Kijelölt fájlok beolvasása
+IFS=$'\n' read -d '' -r -a selected_files <<< "$(echo "$NAUTILUS_SCRIPT_SELECTED_FILE_PATHS")"
+
+# Alapmappa meghatározása
+default_dir=$(dirname "${selected_files[0]}")
+
+# Képek kiválasztása
+image_files=()
+for file in "${selected_files[@]}"; do
+    if [[ "$file" =~ \.(jpg|jpeg|png|webp|bmp|tiff)$ ]]; then
+        image_files+=("$(realpath "$file")")
+    fi
+done
+
+[ ${#image_files[@]} -eq 0 ] && {
+    zenity --error --width=300 --text="Nincsenek kijelölt képek!\nTámogatott formátumok: JPG, PNG, WEBP, BMP, TIFF"
+    exit 1
+}
+
+# Fő beállítások ablak
+settings=$(zenity --forms --title="Kollázs Beállítások" --width=400 --height=300 \
+    --text="Alapbeállítások" \
+    --add-entry="Oszlopok száma:" \
+    --add-entry="Sorok száma:" \
+    --add-combo="Papírméret" --combo-values="A4|A5|Letter|A3" \
+    --add-combo="Tájolás" --combo-values="Álló|Fekvő" \
+    --add-combo="Képarány" --combo-values="Eredeti|1:1 (Négyzet)|3:2 (Fénykép)|16:9 (Széles)" \
+    --add-combo="Minőség" --combo-values="Kicsi (72DPI)|Közepes (150DPI)|Nagy (300DPI)" \
+    --separator="|")
+
+[ -z "$settings" ] && exit 0
+
+# Beállítások feldolgozása
+cols=$(echo "$settings" | cut -d '|' -f1)
+rows=$(echo "$settings" | cut -d '|' -f2)
+paper_size=$(echo "$settings" | cut -d '|' -f3 | tr '[:upper:]' '[:lower:]')
+orientation=$(echo "$settings" | cut -d '|' -f4)
+aspect_ratio=$(echo "$settings" | cut -d '|' -f5)
+quality=$(echo "$settings" | cut -d '|' -f6)
+
+# Képarány beállítás
+case "$aspect_ratio" in
+    "1:1 (Négyzet)") geometry="1000x1000" ;;
+    "3:2 (Fénykép)") geometry="1500x1000" ;;
+    "16:9 (Széles)") geometry="1600x900" ;;
+    *) geometry="1000x1000>" ;;  # Eredeti arány, max 1000px
+esac
+
+# Minőség beállítás
+case "$quality" in
+    "Kicsi (72DPI)") density=72; quality=40 ;;
+    "Közepes (150DPI)") density=150; quality=75 ;;
+    *) density=300; quality=85 ;;
+esac
+
+# PDF generálás
+temp_pdf=$(mktemp /tmp/collage_XXXXXX.pdf)
+
+(
+echo "50"
+montage -tile "${cols}x${rows}" \
+    -geometry "${geometry}+20+20" \
+    -background white \
+    -quality $quality \
+    -density $density \
+    "${image_files[@]}" \
+    -page "${paper_size}${orientation}" \
+    "$temp_pdf"
+echo "100"
+) | zenity --progress --title="Kollázs készítése" --text="Képek összeillesztése..." --percentage=0 --auto-close
+
+[ ! -s "$temp_pdf" ] && {
+    zenity --error --width=300 --text="Hiba történt a PDF generálása során!"
+    exit 1
+}
+
+# Mentési lehetőségek
+choice=$(zenity --list --title="Kollázs Mentése" --width=450 --height=220 \
+    --text="Kollázs készült (Méret: $(du -h "$temp_pdf" | cut -f1))\nMit szeretnél tenni?" \
+    --column="Opció" --column="Leírás" \
+    "Mentés itt" "Mentés a képek mappájába (${default_dir})" \
+    "Mentés máshová" "Másik mappa kiválasztása" \
+    "Előnézet" "Megnyitás PDF-nézegetőben" \
+    "Nyomtatás" "Nyomtatás alapértelmezett nyomtatóval")
+
+case "$choice" in
+    "Mentés itt")
+        final_pdf="${default_dir}/Kollazs_$(date +%Y%m%d_%H%M%S).pdf"
+        mv "$temp_pdf" "$final_pdf"
+        zenity --info --width=300 --text="PDF elmentve ide:\n${final_pdf/#$HOME/~}"
+        ;;
+    "Mentés máshová")
+        target_dir=$(zenity --file-selection --directory --title="Válassz mentési mappát")
+        if [ -n "$target_dir" ]; then
+            final_pdf="${target_dir}/Kollazs_$(date +%Y%m%d_%H%M%S).pdf"
+            mv "$temp_pdf" "$final_pdf"
+            zenity --info --width=300 --text="PDF elmentve ide:\n${final_pdf/#$HOME/~}"
+        else
+            mv "$temp_pdf" "${default_dir}/Kollazs_$(date +%Y%m%d_%H%M%S).pdf"
+        fi
+        ;;
+    "Előnézet")
+        if command -v evince >/dev/null; then
+            evince "$temp_pdf" &
+        else
+            zenity --error --width=300 --text="Az Evince PDF-nézegető nincs telepítve!"
+        fi
+        ;;
+    "Nyomtatás")
+        lp "$temp_pdf" | zenity --progress --pulsate --text="Nyomtatás..." --auto-close
+        zenity --info --width=300 --text="Nyomtatás elindítva!"
+        ;;
+    *)
+        rm "$temp_pdf"
+        ;;
+esac
